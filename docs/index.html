@@ -1,1 +1,317 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>English Runner — Lernspiel</title>
+  <style>
+    :root{--bg:#0e0f1a;--ground:#1b1d2b;--accent:#ffcc00;--text:#e9eef8}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial,Helvetica,sans-serif;background:linear-gradient(180deg,var(--bg),#0b0c10);color:var(--text)}
+    #gameWrap{max-width:900px;margin:20px auto;padding:12px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+    h1{font-size:18px;margin:0}
+    .btn{background:#2a2d44;border:none;padding:8px 12px;border-radius:8px;color:var(--text);cursor:pointer}
+    canvas{display:block;width:100%;height:60vh;border-radius:12px;background:linear-gradient(180deg,#4b6, #123)}
+    #hud{display:flex;gap:8px;align-items:center;margin-top:8px}
+    .card{background:rgba(255,255,255,0.03);padding:8px;border-radius:8px;font-size:14px}
+    #overlay{position:fixed;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+    .modal{background:#0f1724;color:var(--text);padding:18px;border-radius:12px;min-width:280px;max-width:520px;box-shadow:0 8px 30px rgba(0,0,0,0.6);pointer-events:auto}
+    .hidden{display:none}
+    .choices{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+    .choice{flex:1 1 calc(50% - 8px);padding:8px;border-radius:8px;background:#1b2433;text-align:center;cursor:pointer}
+    footer{margin-top:12px;font-size:12px;color:#9aa5c6}
+    /* touch controls */
+    #controls{display:flex;gap:6px;margin-top:10px}
+    .touchBtn{flex:1;padding:10px;border-radius:10px;background:rgba(255,255,255,0.03);text-align:center}
+    @media(min-width:800px){canvas{height:66vh}}
+  </style>
+</head>
+<body>
+  <div id="gameWrap">
+    <header>
+      <h1>English Runner — Lernspiel</h1>
+      <div>
+        <button id="startBtn" class="btn">Start</button>
+        <button id="resetBtn" class="btn">Reset</button>
+      </div>
+    </header>
 
+    <canvas id="gameCanvas" width="900" height="600"></canvas>
+
+    <div id="hud">
+      <div class="card">Punkte: <span id="score">0</span></div>
+      <div class="card">Leben: <span id="lives">3</span></div>
+      <div class="card">Gelernt: <span id="learned">0</span></div>
+      <div style="margin-left:auto;font-size:13px;color:#cfe">Tastatur: Pfeil oben = springen</div>
+    </div>
+
+    <div id="controls" aria-hidden="true">
+      <div id="jumpTouch" class="touchBtn">Springen</div>
+      <div id="duckTouch" class="touchBtn">Rutschen</div>
+    </div>
+
+    <footer>Für GitHub Pages: datei als <code>index.html</code> speichern und in repo pushen.</footer>
+  </div>
+
+  <div id="overlay">
+    <div id="startModal" class="modal">
+      <h2>Willkommen</h2>
+      <p>Endlos-Runner kombiniert mit einfachen Vokabel-Checks. Sammle "Wortkapseln" und wähle die richtige englische Übersetzung. Keine urheberrechtlich geschuetzten assets — nur saubere, freie Grafiken.</p>
+      <p style="margin-top:8px">Tip: Auf dem Desktop taste <kbd>oben</kbd> zum Springen. Auf Mobiltelefon: "Springen" benutzen.</p>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button id="playNow" class="btn">Los</button>
+        <button id="how" class="btn">Wortliste</button>
+      </div>
+    </div>
+
+    <div id="quizModal" class="modal hidden">
+      <h3 id="quizPrompt">Welche Uebersetzung ist korrekt?</h3>
+      <div class="choices" id="choices"></div>
+      <div style="margin-top:10px;text-align:right"><button id="closeQuiz" class="btn">Weiter</button></div>
+    </div>
+
+    <div id="wordsModal" class="modal hidden">
+      <h3>Wortliste (Beispiele)</h3>
+      <p>Das Spiel benutzt eine einfache Wortliste. Du kannst die Liste im Code anpassen.</p>
+      <ul id="wordList"></ul>
+      <div style="text-align:right;margin-top:8px"><button id="closeWords" class="btn">Schliessen</button></div>
+    </div>
+  </div>
+
+  <script>
+    // --- einfache Wortliste: deutsch -> englisch ---
+    const WORDS = [
+      {de:'Haus',en:'house'},
+      {de:'Katze',en:'cat'},
+      {de:'laufen',en:'run'},
+      {de:'Essen',en:'food'},
+      {de:'Buch',en:'book'},
+      {de:'rot',en:'red'},
+      {de:'gross',en:'big'},
+      {de:'klein',en:'small'},
+      {de:'Wasser',en:'water'},
+      {de:'freund',en:'friend'}
+    ];
+
+    // --- canvas setup ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    // scale for responsive display
+    function fitCanvas(){
+      const ratio = canvas.width/canvas.height;
+      const w = Math.min(window.innerWidth-40,900);
+      canvas.style.width = w+'px';
+      canvas.style.height = Math.round(w/ratio)+'px';
+    }
+    window.addEventListener('resize', fitCanvas);
+    fitCanvas();
+
+    // game state
+    let running = false;
+    let lastTime = 0;
+    let score = 0, lives = 3, learned = 0;
+
+    // player
+    const player = {x:120,y:H-130,w:40,h:60,vy:0,groundY:H-80,jumping:false,duck:false};
+
+    // obstacles and capsules
+    let obstacles = [];
+    let capsules = [];
+    let speed = 300; // px per second
+    let spawnTimer = 0;
+
+    // helper
+    function rand(a,b){return a+Math.random()*(b-a)}
+
+    function reset(){
+      score=0;lives=3;learned=0;obstacles=[];capsules=[];speed=300;spawnTimer=0;player.y=player.groundY;player.vy=0;player.jumping=false;running=false;updateHUD();}
+
+    function updateHUD(){
+      document.getElementById('score').innerText = Math.floor(score);
+      document.getElementById('lives').innerText = lives;
+      document.getElementById('learned').innerText = learned;
+    }
+
+    // game loop
+    function gameLoop(ts){
+      if(!running) return;
+      if(!lastTime) lastTime=ts; const dt=(ts-lastTime)/1000; lastTime=ts;
+      // update
+      spawnTimer += dt;
+      if(spawnTimer>1.0){
+        spawnTimer=0;
+        if(Math.random()<0.6) spawnObstacle();
+        if(Math.random()<0.5) spawnCapsule();
+      }
+      // speed up gradually
+      speed += dt*2;
+
+      obstacles.forEach(o=>{o.x -= speed*dt});
+      capsules.forEach(c=>{c.x -= speed*dt});
+      obstacles = obstacles.filter(o=>o.x+o.w> -50);
+      capsules = capsules.filter(c=>c.x+30> -50);
+
+      // player physics
+      player.vy += 1000*dt; // gravity
+      player.y += player.vy*dt;
+      if(player.y > player.groundY){player.y = player.groundY;player.vy=0;player.jumping=false}
+
+      // collisions
+      obstacles.forEach(o=>{
+        if(rectsOverlap(player,o)){
+          // hit
+          lives -=1; o.x = -100; // remove
+          if(lives<=0){ endGame(); }
+        }
+      });
+
+      capsules.forEach((c,i)=>{
+        if(rectsOverlap(player,{x:c.x,y:c.y,w:30,h:30})){
+          // collect capsule => trigger quiz
+          triggerQuiz(c.wordIndex);
+          capsules.splice(i,1);
+        }
+      });
+
+      // score
+      score += dt*10;
+      updateHUD();
+      // draw
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function rectsOverlap(a,b){
+      return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + (b.h||b.h===0?b.h:0) && a.y + a.h > b.y;
+    }
+
+    function spawnObstacle(){
+      const h = rand(30,80);
+      obstacles.push({x:W+50,y:player.groundY + (player.h - h),w:30,h:h});
+    }
+
+    function spawnCapsule(){
+      const y = player.groundY - rand(0,80);
+      const idx = Math.floor(Math.random()*WORDS.length);
+      capsules.push({x:W+60,y:y,w:30,h:30,wordIndex:idx});
+    }
+
+    function draw(){
+      // clear
+      ctx.clearRect(0,0,W,H);
+      // background sky
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0,'#7cc');
+      g.addColorStop(1,'#245');
+      ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+      // ground
+      ctx.fillStyle = '#15202b'; ctx.fillRect(0,player.groundY+player.h, W, H - (player.groundY+player.h));
+      // obstacles
+      obstacles.forEach(o=>{
+        ctx.fillStyle = '#b44'; ctx.fillRect(o.x,o.y,o.w,o.h);
+      });
+      // capsules
+      capsules.forEach(c=>{
+        // little glowing circle
+        ctx.beginPath(); ctx.arc(c.x+15,c.y+15,14,0,Math.PI*2); ctx.fillStyle='rgba(255,220,80,0.95)'; ctx.fill();
+        ctx.fillStyle='#222'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.fillText(WORDS[c.wordIndex].de, c.x+15, c.y+20);
+      });
+      // player
+      ctx.fillStyle = '#0ff';
+      ctx.fillRect(player.x,player.y,player.w,player.h);
+      // HUD inside canvas for fun
+      ctx.fillStyle='rgba(0,0,0,0.2)'; ctx.fillRect(8,8,140,34);
+      ctx.fillStyle='#fff'; ctx.font='16px sans-serif'; ctx.textAlign='left'; ctx.fillText('Score: '+Math.floor(score), 14,30);
+    }
+
+    // --- quiz logic ---
+    const overlay = document.getElementById('overlay');
+    const quizModal = document.getElementById('quizModal');
+    const quizPrompt = document.getElementById('quizPrompt');
+    const choicesWrap = document.getElementById('choices');
+    let currentQuizOpen = false;
+
+    function triggerQuiz(wordIndex){
+      running = false; // pause
+      currentQuizOpen = true;
+      quizModal.classList.remove('hidden');
+      document.getElementById('startModal').classList.add('hidden');
+      const word = WORDS[wordIndex];
+      quizPrompt.innerText = `Was ist die richtige englische Uebersetzung fuer "${word.de}"?`;
+      // build choices
+      const correct = word.en;
+      const options = new Set([correct]);
+      while(options.size < 4){
+        const pick = WORDS[Math.floor(Math.random()*WORDS.length)].en;
+        options.add(pick);
+      }
+      const arr = Array.from(options).sort(()=>Math.random()-0.5);
+      choicesWrap.innerHTML = '';
+      arr.forEach(opt=>{
+        const el = document.createElement('div'); el.className='choice'; el.innerText=opt;
+        el.addEventListener('click', ()=>{
+          if(!currentQuizOpen) return;
+          if(opt === correct){
+            learned +=1; score += 50; showToast('Richtig! +50 Punkte');
+          } else { lives -=1; showToast('Falsch! -1 Leben'); if(lives<=0) endGame(); }
+          updateHUD();
+          closeQuiz();
+        });
+        choicesWrap.appendChild(el);
+      });
+    }
+
+    function closeQuiz(){
+      currentQuizOpen = false;
+      quizModal.classList.add('hidden');
+      running = true; lastTime = 0; requestAnimationFrame(gameLoop);
+    }
+
+    // tiny toast
+    function showToast(txt){
+      const t = document.createElement('div'); t.style.position='fixed'; t.style.left='50%'; t.style.transform='translateX(-50%)'; t.style.bottom='18px'; t.style.padding='8px 12px'; t.style.background='rgba(0,0,0,0.6)'; t.style.borderRadius='8px'; t.style.color='#fff'; t.innerText=txt; document.body.appendChild(t);
+      setTimeout(()=>{t.style.transition='opacity 0.4s'; t.style.opacity=0; setTimeout(()=>t.remove(),400)},1000);
+    }
+
+    function endGame(){
+      running = false;
+      alert('Spiel zu Ende! Punkte: '+Math.floor(score));
+      reset();
+      document.getElementById('startModal').classList.remove('hidden');
+    }
+
+    // controls
+    document.addEventListener('keydown', e=>{
+      if(e.code==='ArrowUp' || e.code==='Space'){ if(!player.jumping){player.vy=-480;player.jumping=true} }
+      if(e.code==='KeyR'){ reset(); }
+    });
+
+    document.getElementById('jumpTouch').addEventListener('touchstart', ev=>{ ev.preventDefault(); if(!player.jumping){player.vy=-480;player.jumping=true} });
+    document.getElementById('duckTouch').addEventListener('touchstart', ev=>{ ev.preventDefault(); player.duck=true; setTimeout(()=>player.duck=false,500); });
+
+    // UI buttons
+    document.getElementById('startBtn').addEventListener('click', ()=>startGame());
+    document.getElementById('resetBtn').addEventListener('click', ()=>{ reset(); document.getElementById('startModal').classList.remove('hidden'); });
+    document.getElementById('playNow').addEventListener('click', ()=>{ document.getElementById('startModal').classList.add('hidden'); startGame(); });
+    document.getElementById('how').addEventListener('click', ()=>{ showWords(); });
+    document.getElementById('closeQuiz').addEventListener('click', ()=>{ closeQuiz(); });
+    document.getElementById('closeWords').addEventListener('click', ()=>{ document.getElementById('wordsModal').classList.add('hidden'); document.getElementById('startModal').classList.remove('hidden'); });
+
+    document.getElementById('wordList').innerHTML = WORDS.map(w=>`<li>${w.de} — ${w.en}</li>`).join('');
+
+    function showWords(){ document.getElementById('startModal').classList.add('hidden'); document.getElementById('wordsModal').classList.remove('hidden'); }
+
+    function startGame(){ if(running) return; running=true; lastTime=0; requestAnimationFrame(gameLoop); }
+
+    // initial draw
+    draw();
+    // expose reset to console for quick testing
+    window.resetGame = reset;
+
+    // small accessibility: let user edit word list in console
+    window.WORDS = WORDS;
+  </script>
+</body>
+</html>
